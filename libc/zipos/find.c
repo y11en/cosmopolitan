@@ -18,27 +18,49 @@
 ╚─────────────────────────────────────────────────────────────────────────────*/
 #include "ape/relocations.h"
 #include "libc/assert.h"
+#include "libc/bits/safemacros.internal.h"
+#include "libc/intrin/kprintf.h"
+#include "libc/nexgen32e/crc32.h"
 #include "libc/runtime/runtime.h"
 #include "libc/str/str.h"
 #include "libc/zip.h"
 #include "libc/zipos/zipos.internal.h"
 
-// TODO(jart): improve time complexity here
-
-ssize_t __zipos_find(struct Zipos *zipos, const struct ZiposUri *name) {
+ssize_t __zipos_lookup(struct Zipos *zipos, const char *path, size_t size) {
+  uint32_t hash;
   const char *zname;
-  size_t i, n, c, znamesize;
-  c = GetZipCdirOffset(zipos->cdir);
-  n = GetZipCdirRecords(zipos->cdir);
-  for (i = 0; i < n; ++i, c += ZIP_CFILE_HDRSIZE(zipos->map + c)) {
-    assert(ZIP_CFILE_MAGIC(zipos->map + c) == kZipCfileHdrMagic);
-    zname = ZIP_CFILE_NAME(zipos->map + c);
-    znamesize = ZIP_CFILE_NAMESIZE(zipos->map + c);
-    if ((name->len == znamesize && !memcmp(name->path, zname, name->len)) ||
-        (name->len + 1 == znamesize && !memcmp(name->path, zname, name->len) &&
-         zname[name->len] == '/')) {
-      return c;
-    }
+  size_t i, n, c, step, znamesize;
+  if (zipos->paths.n) {
+    step = 0;
+    hash = max(1, crc32c(0, path, size));
+    do {
+      i = (hash + step * ((step + 1) >> 1)) & (zipos->paths.n - 1);
+      if (hash == zipos->paths.p[i].hash) {
+        zname = ZIP_CFILE_NAME(zipos->map + zipos->paths.p[i].c);
+        znamesize = ZIP_CFILE_NAMESIZE(zipos->map + zipos->paths.p[i].c);
+        if (znamesize == size && !memcmp(path, zname, znamesize)) {
+          return zipos->paths.p[i].c;
+        }
+      }
+      ++step;
+    } while (zipos->paths.p[i].hash);
   }
   return -1;
+}
+
+// searches for `path` and `path/` in hash table
+// returns map-relative offset of central directory entry
+ssize_t __zipos_find(struct Zipos *zipos, const struct ZiposUri *name) {
+  char *s;
+  ssize_t rc;
+  const char *zname;
+  size_t i, n, c, znamesize;
+  if ((rc = __zipos_lookup(zipos, name->path, name->len)) == -1) {
+    if ((s = malloc(name->len + 2))) {
+      stpcpy(mempcpy(s, name->path, name->len), "/");
+      rc = __zipos_lookup(zipos, s, name->len + 1);
+      free(s);
+    }
+  }
+  return rc;
 }

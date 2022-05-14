@@ -18,6 +18,7 @@
 ╚─────────────────────────────────────────────────────────────────────────────*/
 #include "libc/calls/calls.h"
 #include "libc/stdio/stdio.h"
+#include "libc/testlib/ezbench.h"
 #include "libc/testlib/testlib.h"
 
 FILE *f;
@@ -59,4 +60,11 @@ TEST(fgetc, testUnbuffered) {
   EXPECT_TRUE(!memcmp(buf, "h\377", 2));
   EXPECT_TRUE(feof(f));
   EXPECT_NE(-1, fclose(f));
+}
+
+BENCH(fputc, bench) {
+  ASSERT_NE(NULL, (f = fopen("hog", "w+")));
+  EZBENCH2("fputc", donothing, fputc('x', f));
+  EZBENCH2("fputc_unlocked", donothing, fputc_unlocked('x', f));
+  EXPECT_EQ(0, fclose(f));
 }

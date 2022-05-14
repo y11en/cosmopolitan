@@ -16,6 +16,7 @@
 │ TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR             │
 │ PERFORMANCE OF THIS SOFTWARE.                                                │
 ╚─────────────────────────────────────────────────────────────────────────────*/
+#include "libc/bits/bits.h"
 #include "libc/bits/safemacros.internal.h"
 #include "libc/calls/calls.h"
 #include "libc/calls/internal.h"
@@ -29,6 +30,8 @@
 #include "libc/limits.h"
 #include "libc/macros.internal.h"
 #include "libc/mem/alloca.h"
+#include "libc/nexgen32e/bsr.h"
+#include "libc/nexgen32e/crc32.h"
 #include "libc/runtime/runtime.h"
 #include "libc/str/str.h"
 #include "libc/sysv/consts/auxv.h"
@@ -38,6 +41,43 @@
 #include "libc/sysv/consts/sig.h"
 #include "libc/zip.h"
 #include "libc/zipos/zipos.internal.h"
+
+static void FreeZiposHashTable(void *p) {
+  free(p);
+}
+
+static size_t RoundUpToNearestTwoPower(size_t x) {
+  return x > 1 ? 2ul << bsrl(x - 1) : x ? 1 : 0;
+}
+
+static void IndexZiposHashTable(struct Zipos *zipos) {
+  uint32_t mode;
+  const char *zname;
+  struct ZiposHash hash;
+  size_t i, j, n, c, step, znamesize;
+  c = GetZipCdirOffset(zipos->cdir);
+  n = GetZipCdirRecords(zipos->cdir);
+  zipos->paths.n = RoundUpToNearestTwoPower(n) * 2;
+  if ((zipos->paths.p = calloc(zipos->paths.n, sizeof(*zipos->paths.p)))) {
+    for (i = 0; i < n; ++i, c += ZIP_CFILE_HDRSIZE(zipos->map + c)) {
+      zname = ZIP_CFILE_NAME(zipos->map + c);
+      znamesize = ZIP_CFILE_NAMESIZE(zipos->map + c);
+      hash.hash = max(1, crc32c(0, zname, znamesize));
+      hash.mode = GetZipCfileMode(zipos->map + c);
+      hash.c = c;
+      step = 0;
+      do {
+        j = (hash.hash + step * ((step + 1) >> 1)) & (zipos->paths.n - 1);
+        ++step;
+      } while (zipos->paths.p[j].hash);
+      zipos->paths.p[j] = hash;
+    }
+    __cxa_atexit(FreeZiposHashTable, zipos->paths.p, 0);
+  } else {
+    zipos->paths.n = 0;
+    zipos->paths.p = 0;
+  }
+}
 
 static uint64_t __zipos_get_min_offset(const uint8_t *base,
                                        const uint8_t *cdir) {
@@ -112,6 +152,7 @@ struct Zipos *__zipos_get(void) {
   }
   if (zipos.cdir) {
     res = &zipos;
+    IndexZiposHashTable(&zipos);
   } else {
     res = 0;
   }

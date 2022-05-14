@@ -7,9 +7,21 @@ COSMOPOLITAN_C_START_
 struct stat;
 struct iovec;
 
+struct ZiposHash {
+  uint32_t hash;
+  uint32_t mode;
+  size_t c;
+};
+
+struct ZiposHashTable {
+  size_t n;
+  struct ZiposHash *p;
+};
+
 struct Zipos {
   uint8_t *map;
   uint8_t *cdir;
+  struct ZiposHashTable paths;
 };
 
 struct ZiposUri {
